@@ -22,10 +22,11 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
+    // Whitelist all necessary domains for CORS and WebSockets
     origin: [
-      'http://localhost:5173',         // Local Dev
-      'https://qr-diine-in.web.app',   // Live Firebase Domain
-      'https://qr-dining.onrender.com' // Your Render Backend URL
+      'http://localhost:5173',
+      'https://qr-diine-in.web.app',
+      'https://qr-dining.onrender.com'
     ], 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   },
@@ -291,8 +292,7 @@ app.get('/api/admin/tables', authMiddleware, async (req, res) => {
 });
 
 /**
- * POST /api/menu/item
- * Adds a new menu item (Protected Route + Image Upload)
+ * POST /api/menu/item (Secured, with Image Upload)
  */
 app.post('/api/menu/item', authMiddleware, upload.single('image'), async (req, res) => {
   const { category_id, name, description, price } = req.body;
@@ -326,8 +326,7 @@ app.post('/api/menu/item', authMiddleware, upload.single('image'), async (req, r
 });
 
 /**
- * PUT /api/menu/item/:id
- * Updates a menu item's details (Protected Route)
+ * PUT /api/menu/item/:id (Edit Item)
  */
 app.put('/api/menu/item/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
@@ -363,8 +362,7 @@ app.put('/api/menu/item/:id', authMiddleware, async (req, res) => {
 });
 
 /**
- * PUT /api/menu/item/:id/availability
- * Marks an item as available or unavailable (a "soft delete")
+ * PUT /api/menu/item/:id/availability (Archive)
  */
 app.put('/api/menu/item/:id/availability', authMiddleware, async (req, res) => {
   try {
@@ -391,8 +389,7 @@ app.put('/api/menu/item/:id/availability', authMiddleware, async (req, res) => {
 });
 
 /**
- * GET /api/admin/orders/unpaid/:restaurantId
- * Fetches all orders that have been placed but are NOT yet paid.
+ * GET /api/admin/orders/unpaid/:restaurantId (Admin Billing Fetch)
  */
 app.get('/api/admin/orders/unpaid/:restaurantId', authMiddleware, async (req, res) => {
   const { restaurantId } = req.params;
@@ -423,8 +420,7 @@ app.get('/api/admin/orders/unpaid/:restaurantId', authMiddleware, async (req, re
 });
 
 /**
- * PUT /api/admin/order/:orderId/paid
- * Marks a specific order as paid.
+ * PUT /api/admin/order/:orderId/paid (Mark Paid)
  */
 app.put('/api/admin/order/:orderId/paid', authMiddleware, async (req, res) => {
   const { orderId } = req.params;
@@ -447,8 +443,7 @@ app.put('/api/admin/order/:orderId/paid', authMiddleware, async (req, res) => {
 });
 
 /**
- * POST /api/auth/register
- * Creates a new user (the restaurant owner)
+ * AUTH ROUTES
  */
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, restaurant_id } = req.body;
@@ -464,7 +459,7 @@ app.post('/api/auth/register', async (req, res) => {
       RETURNING id, email, restaurant_id
     `;
     const { rows } = await db.query(query, [email, password_hash, restaurant_id]);
-    res.status(201).json(rows[0]);
+    res.status(2JSON.stringify()).json(rows[0]);
   } catch (err) {
     if (err.code === '23505') {
       return res.status(400).json({ error: 'A user with this email already exists' });
@@ -474,14 +469,10 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-/**
- * POST /api/auth/login
- * Logs in a user and returns a JSON Web Token (JWT)
- */
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
-    return res.status(4all).json({ error: 'Missing email or password' });
+    return res.status(400).json({ error: 'Missing email or password' }); // Fixed the '4all' typo
   }
   try {
     const query = 'SELECT * FROM "users" WHERE email = $1';
