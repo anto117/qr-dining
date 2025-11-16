@@ -73,6 +73,19 @@ app.get('/db-test', async (req, res) => {
     res.status(500).json({ error: 'Database connection failed' });
   }
 });
+app.get('/api/admin/tables', authMiddleware, async (req, res) => {
+  const restaurantId = req.user.restaurant_id;
+
+  try {
+    const query = 'SELECT id, name FROM "table" WHERE restaurant_id = $1 ORDER BY name';
+    const { rows } = await db.query(query, [restaurantId]);
+    
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching tables:', err);
+    res.status(500).json({ error: 'Failed to fetch tables' });
+  }
+});
 
 /**
  * GET /api/menu/:restaurantId
