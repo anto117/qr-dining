@@ -1,0 +1,32 @@
+### Add a new menu item
+POST http://localhost:4000/api/menu/item
+Content-Type: application/json
+
+{
+  "category_id": 1, 
+  "name": "Classic Burger",
+  "description": "A delicious beef burger with fries",
+  "price": "14.50"
+}
+
+###
+### ---------------------------
+### Register a new Admin User
+POST http://localhost:4000/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "cafe.in",
+  "password": "cafe123",
+  "restaurant_id": "de60a4a9-1c60-4f86-986c-c4a304c4cd8e"
+}
+
+### ---------------------------
+### Login as Admin User
+POST http://localhost:4000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "cafe.in",
+  "password": "cafe123"
+}
