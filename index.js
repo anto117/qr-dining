@@ -1,4 +1,4 @@
-// --- index.js (with Auth & Soft Delete) ---
+// --- index.js (Final Production Version) ---
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -16,15 +16,16 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const server = http.createServer(app);
 
-// --- In index.js (replace the block that initializes 'io') ---
+// ----------------------------------------
+// MIDDLEWARE & SOCKET SETUP
+// ----------------------------------------
 
 const io = new Server(server, {
   cors: {
-    // ⭐️ FIX: The list of domains MUST be the value of the 'origin' key ⭐️
     origin: [
       'http://localhost:5173',         // Local Dev
       'https://qr-diine-in.web.app',   // Live Firebase Domain
-      'https://qr-dining.onrender.com' // Render's own URL (optional, but safe)
+      'https://qr-dining.onrender.com' // Your Render Backend URL
     ], 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   },
@@ -36,15 +37,18 @@ app.use(express.json());
 // --- Socket.io connection logic ---
 io.on('connection', (socket) => {
   console.log(`✅ A client connected: ${socket.id}`);
+  
   socket.on('joinRestaurantRoom', (restaurantId) => {
     socket.join(restaurantId);
     console.log(`KDS ${socket.id} joined room: ${restaurantId}`);
   });
-  // --- In index.js, inside io.on('connection', (socket) => { ... }) ---
 
-  // ⭐️ NEW: Listen for a waiter call from the customer PWA
+  socket.on('joinOrderRoom', (orderId) => {
+    socket.join(orderId);
+    console.log(`Customer ${socket.id} joined room: ${orderId}`);
+  });
+
   socket.on('callWaiter', (data) => {
-    // Data contains table info. Emit the alert to the restaurant's room.
     io.to(data.restaurantId).emit('waiterCall', {
       tableId: data.tableId,
       tableName: data.tableName,
@@ -54,18 +58,15 @@ io.on('connection', (socket) => {
     console.log(`Waiter call alert sent from ${data.tableName} to room ${data.restaurantId}`);
   });
 
-  socket.on('disconnect', () => { /* ... */ });
-// ...
-  socket.on('joinOrderRoom', (orderId) => {
-    socket.join(orderId);
-    console.log(`Customer ${socket.id} joined room: ${orderId}`);
-  });
   socket.on('disconnect', () => {
     console.log(`❌ Client disconnected: ${socket.id}`);
   });
 });
 
-// --- API Routes ---
+// ----------------------------------------
+// 1. PUBLIC/TEST ROUTES
+// ----------------------------------------
+
 app.get('/', (req, res) => res.send('Kitchen API is running!'));
 
 app.get('/db-test', async (req, res) => {
@@ -80,52 +81,10 @@ app.get('/db-test', async (req, res) => {
     res.status(500).json({ error: 'Database connection failed' });
   }
 });
-app.get('/api/admin/tables', authMiddleware, async (req, res) => {
-  const restaurantId = req.user.restaurant_id;
 
-  try {
-    const query = 'SELECT id, name FROM "table" WHERE restaurant_id = $1 ORDER BY name';
-    const { rows } = await db.query(query, [restaurantId]);
-    
-    res.status(200).json(rows);
-  } catch (err) {
-    console.error('Error fetching tables:', err);
-    res.status(500).json({ error: 'Failed to fetch tables' });
-  }
-});
-
-/**
- * GET /api/menu/:restaurantId
- * Fetches the complete menu (including archived items) for the Admin.
- */
-app.get('/api/menu/:restaurantId', async (req, res) => {
-  const { restaurantId } = req.params;
-  try {
-    const catQuery = 'SELECT * FROM category WHERE restaurant_id = $1 ORDER BY display_order';
-    const { rows: categories } = await db.query(catQuery, [restaurantId]);
-    const itemQuery = `
-      SELECT mi.* FROM menu_item mi
-      WHERE mi.category_id IN (SELECT id FROM category WHERE restaurant_id = $1)
-      ORDER BY mi.name
-    `;
-    const { rows: allItems } = await db.query(itemQuery, [restaurantId]);
-    const menu = categories.map(category => ({
-      ...category,
-      items: allItems.filter(item => item.category_id === category.id)
-    }));
-    res.status(200).json(menu);
-  } catch (err) {
-    console.error('Error fetching menu:', err);
-    res.status(500).json({ error: 'Failed to fetch menu' });
-  }
-});
-
-
-/**
- * GET /api/menu-for-table/:tableId
- * Fetches the customer-facing menu (ONLY available items)
- */
-// --- In index.js, replace the existing GET /api/menu-for-table/:tableId block ---
+// ----------------------------------------
+// 2. CUSTOMER PWA API ROUTES
+// ----------------------------------------
 
 /**
  * GET /api/menu-for-table/:tableId
@@ -159,14 +118,14 @@ app.get('/api/menu-for-table/:tableId', async (req, res) => {
       items: allItems.filter(item => item.category_id === category.id)
     }));
 
-    // ⭐️ NEW: Fetch ALL UNPAID orders for this table
+    // Fetch ALL UNPAID orders for this table
     const unpaidOrdersQuery = `
         SELECT 
             o.id, o.total_price, o.status, o.created_at,
             JSONB_AGG(jsonb_build_object('name', mi.name, 'quantity', oi.quantity)) AS items
         FROM "order" o
-        JOIN order_item oi ON o.id = oi.order_id
-        JOIN menu_item mi ON oi.menu_item_id = mi.id
+        LEFT JOIN order_item oi ON o.id = oi.order_id
+        LEFT JOIN menu_item mi ON oi.menu_item_id = mi.id
         WHERE o.table_id = $1 AND o.is_paid = FALSE
         GROUP BY o.id
         ORDER BY o.created_at ASC
@@ -176,8 +135,9 @@ app.get('/api/menu-for-table/:tableId', async (req, res) => {
     // Send the complete payload
     res.status(200).json({
       table: { id: tableId, name: tableName },
+      restaurant: { id: restaurant_id }, // Added for call waiter
       menu: menu,
-      unpaidOrders: unpaidOrders, // ⭐️ NEW DATA
+      unpaidOrders: unpaidOrders,
     });
   } catch (err) {
     console.error('Error fetching menu for table:', err);
@@ -284,72 +244,88 @@ app.put('/api/order/:id/status', async (req, res) => {
   }
 });
 
-// ===================================
-// --- 🚀 ADMIN & AUTH ROUTES ---
-// ===================================
+// ----------------------------------------
+// 3. ADMIN & AUTH ROUTES
+// ----------------------------------------
 
 /**
- * POST /api/menu/item
- * Adds a new menu item (Protected Route)
+ * GET /api/menu/:restaurantId
+ * Fetches the complete menu (including archived items) for the Admin.
  */
-// ===================================
-// --- 🚀 ADMIN & AUTH ROUTES ---
-// ===================================
+app.get('/api/menu/:restaurantId', async (req, res) => {
+  const { restaurantId } = req.params;
+  try {
+    const catQuery = 'SELECT * FROM category WHERE restaurant_id = $1 ORDER BY display_order';
+    const { rows: categories } = await db.query(catQuery, [restaurantId]);
+    const itemQuery = `
+      SELECT mi.* FROM menu_item mi
+      WHERE mi.category_id IN (SELECT id FROM category WHERE restaurant_id = $1)
+      ORDER BY mi.name
+    `;
+    const { rows: allItems } = await db.query(itemQuery, [restaurantId]);
+    const menu = categories.map(category => ({
+      ...category,
+      items: allItems.filter(item => item.category_id === category.id)
+    }));
+    res.status(200).json(menu);
+  } catch (err) {
+    console.error('Error fetching menu:', err);
+    res.status(500).json({ error: 'Failed to fetch menu' });
+  }
+});
+
+/**
+ * GET /api/admin/tables
+ * Fetches all tables for the logged-in restaurant (Protected Route)
+ */
+app.get('/api/admin/tables', authMiddleware, async (req, res) => {
+  const restaurantId = req.user.restaurant_id;
+  try {
+    const query = 'SELECT id, name FROM "table" WHERE restaurant_id = $1 ORDER BY name';
+    const { rows } = await db.query(query, [restaurantId]);
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching tables:', err);
+    res.status(500).json({ error: 'Failed to fetch tables' });
+  }
+});
 
 /**
  * POST /api/menu/item
- * Adds a new menu item (Protected Route)
- * ⭐️ NOW WITH IMAGE UPLOAD!
+ * Adds a new menu item (Protected Route + Image Upload)
  */
 app.post('/api/menu/item', authMiddleware, upload.single('image'), async (req, res) => {
-  // 'upload.single('image')' handles the file upload first
   const { category_id, name, description, price } = req.body;
   const restaurantId = req.user.restaurant_id;
-
-  // 1. Check if a file was uploaded
   let imageUrl = null;
   if (req.file) {
-    imageUrl = req.file.path; // This is the URL from Cloudinary
+    imageUrl = req.file.path;
   }
-
   if (!category_id || !name || !price) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
-
   try {
-    // ... (verification logic is the same)
     const catQuery = 'SELECT id FROM category WHERE id = $1 AND restaurant_id = $2';
     const catResult = await db.query(catQuery, [category_id, restaurantId]);
-
     if (catResult.rowCount === 0) {
       return res.status(403).json({ error: 'Category does not belong to your restaurant' });
     }
-
-    // 2. Insert the item with the new image_url
     const priceInCents = Math.round(parseFloat(price) * 100);
     const query = `
       INSERT INTO menu_item (category_id, name, description, price, is_available, image_url)
       VALUES ($1, $2, $3, $4, TRUE, $5)
       RETURNING * `;
-
     const { rows } = await db.query(query, [category_id, name, description, priceInCents, imageUrl]);
-
     res.status(201).json(rows[0]);
-
   } catch (err) {
-    // ⭐️ MODIFIED ERROR LOGGING ⭐️
     console.error('--- 🔴 ERROR ADDING ITEM 🔴 ---');
     console.error('Message:', err.message);
     console.error('Stack:', err.stack);
-    // ⭐️ END MODIFIED LOGGING ⭐️
     res.status(500).json({ error: 'Failed to add menu item' });
   }
 });
 
-// ... (rest of your admin routes like PUT, login, etc.)
-
 /**
- * ⭐️ --- THIS IS THE FIXED ENDPOINT --- ⭐️
  * PUT /api/menu/item/:id
  * Updates a menu item's details (Protected Route)
  */
@@ -361,12 +337,8 @@ app.put('/api/menu/item/:id', authMiddleware, async (req, res) => {
   if (!name || !price || !category_id) {
     return res.status(400).json({ error: 'Missing name, price, or category_id' });
   }
-
   try {
     const priceInCents = Math.round(parseFloat(price) * 100);
-
-    // 1. Verify this item belongs to the user's restaurant
-    // ⭐️ FIX: Changed `SELECT id` to `SELECT mi.id`
     const itemQuery = `
       SELECT mi.id FROM menu_item mi
       JOIN category c ON mi.category_id = c.id
@@ -376,8 +348,6 @@ app.put('/api/menu/item/:id', authMiddleware, async (req, res) => {
     if (itemResult.rowCount === 0) {
       return res.status(403).json({ error: 'This item does not belong to your restaurant' });
     }
-
-    // 2. Update the item
     const updateQuery = `
       UPDATE menu_item
       SET name = $1, description = $2, price = $3, category_id = $4
@@ -385,82 +355,12 @@ app.put('/api/menu/item/:id', authMiddleware, async (req, res) => {
       RETURNING *
     `;
     const { rows } = await db.query(updateQuery, [name, description, priceInCents, category_id, id]);
-
-    res.status(200).json(rows[0]); // Send back the updated item
-
+    res.status(200).json(rows[0]);
   } catch (err) {
     console.error('Error updating item:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
-// ... Add this block after your PUT /api/menu/item/:id/availability endpoint ...
-
-/**
- * GET /api/admin/orders/unpaid/:restaurantId
- * Fetches all orders that have been placed but are NOT yet paid.
- * (Protected Route)
- */
-app.get('/api/admin/orders/unpaid/:restaurantId', authMiddleware, async (req, res) => {
-  const { restaurantId } = req.params;
-  const loggedInRestaurantId = req.user.restaurant_id;
-
-  // Security check: ensure the user can only view their own restaurant's data
-  if (restaurantId !== loggedInRestaurantId) {
-    return res.status(403).json({ msg: 'Unauthorized to view this data' });
-  }
-
-  try {
-    // Complex query to aggregate items per order for efficiency
-    const unpaidOrdersQuery = `
-        SELECT 
-            o.id, o.table_id, o.total_price, o.status, o.created_at, t.name AS table_name,
-            JSONB_AGG(jsonb_build_object('name', mi.name, 'quantity', oi.quantity)) AS items
-        FROM "order" o
-        LEFT JOIN "table" t ON o.table_id = t.id
-        LEFT JOIN order_item oi ON o.id = oi.order_id
-        LEFT JOIN menu_item mi ON oi.menu_item_id = mi.id
-        WHERE o.restaurant_id = $1 AND o.is_paid = FALSE 
-        GROUP BY o.id, t.name
-        ORDER BY o.created_at ASC
-    `;
-    const { rows } = await db.query(unpaidOrdersQuery, [restaurantId]);
-
-    res.status(200).json(rows);
-  } catch (err) {
-    console.error('Error fetching unpaid orders:', err);
-    res.status(500).json({ error: 'Failed to fetch bills' });
-  }
-});
-
-
-/**
- * PUT /api/admin/order/:orderId/paid
- * Marks a specific order as paid.
- * (Protected Route)
- */
-app.put('/api/admin/order/:orderId/paid', authMiddleware, async (req, res) => {
-  const { orderId } = req.params;
-  const restaurantId = req.user.restaurant_id;
-
-  try {
-    const paidQuery = `
-      UPDATE "order" SET is_paid = TRUE 
-      WHERE id = $1 AND restaurant_id = $2 
-      RETURNING id, total_price, table_id
-    `;
-    const { rows } = await db.query(paidQuery, [orderId, restaurantId]);
-
-    if (rows.rowCount === 0) {
-      return res.status(404).json({ msg: 'Order not found or already paid' });
-    }
-
-    res.status(200).json({ msg: 'Order marked as paid', order: rows[0] });
-  } catch (err) {
-    console.error('Error marking order as paid:', err);
-    res.status(500).json({ error: 'Failed to update payment status' });
-  }
-});
-
 
 /**
  * PUT /api/menu/item/:id/availability
@@ -487,6 +387,62 @@ app.put('/api/menu/item/:id/availability', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Error updating item availability:', err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * GET /api/admin/orders/unpaid/:restaurantId
+ * Fetches all orders that have been placed but are NOT yet paid.
+ */
+app.get('/api/admin/orders/unpaid/:restaurantId', authMiddleware, async (req, res) => {
+  const { restaurantId } = req.params;
+  const loggedInRestaurantId = req.user.restaurant_id;
+
+  if (restaurantId !== loggedInRestaurantId) {
+    return res.status(403).json({ msg: 'Unauthorized to view this data' });
+  }
+  try {
+    const unpaidOrdersQuery = `
+        SELECT 
+            o.id, o.table_id, o.total_price, o.status, o.created_at, t.name AS table_name,
+            JSONB_AGG(jsonb_build_object('name', mi.name, 'quantity', oi.quantity)) AS items
+        FROM "order" o
+        LEFT JOIN "table" t ON o.table_id = t.id
+        LEFT JOIN order_item oi ON o.id = oi.order_id
+        LEFT JOIN menu_item mi ON oi.menu_item_id = mi.id
+        WHERE o.restaurant_id = $1 AND o.is_paid = FALSE 
+        GROUP BY o.id, t.name
+        ORDER BY o.created_at ASC
+    `;
+    const { rows } = await db.query(unpaidOrdersQuery, [restaurantId]);
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Error fetching unpaid orders:', err);
+    res.status(500).json({ error: 'Failed to fetch bills' });
+  }
+});
+
+/**
+ * PUT /api/admin/order/:orderId/paid
+ * Marks a specific order as paid.
+ */
+app.put('/api/admin/order/:orderId/paid', authMiddleware, async (req, res) => {
+  const { orderId } = req.params;
+  const restaurantId = req.user.restaurant_id;
+  try {
+    const paidQuery = `
+      UPDATE "order" SET is_paid = TRUE 
+      WHERE id = $1 AND restaurant_id = $2 
+      RETURNING id, total_price, table_id
+    `;
+    const { rows } = await db.query(paidQuery, [orderId, restaurantId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ msg: 'Order not found or already paid' });
+    }
+    res.status(200).json({ msg: 'Order marked as paid', order: rows[0] });
+  } catch (err) {
+    console.error('Error marking order as paid:', err);
+    res.status(500).json({ error: 'Failed to update payment status' });
   }
 });
 
@@ -525,7 +481,7 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
-    return res.status(400).json({ error: 'Missing email or password' });
+    return res.status(4all).json({ error: 'Missing email or password' });
   }
   try {
     const query = 'SELECT * FROM "users" WHERE email = $1';
@@ -557,7 +513,9 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// --- Start The Server ---
+// ----------------------------------------
+// START SERVER
+// ----------------------------------------
 server.listen(PORT, () => {
   console.log(`Server with WebSocket is listening on port ${PORT}`);
 });
