@@ -459,7 +459,7 @@ app.post('/api/auth/register', async (req, res) => {
       RETURNING id, email, restaurant_id
     `;
     const { rows } = await db.query(query, [email, password_hash, restaurant_id]);
-    res.status(2JSON.stringify()).json(rows[0]);
+    res.status(JSON.stringify()).json(rows[0]);
   } catch (err) {
     if (err.code === '23505') {
       return res.status(400).json({ error: 'A user with this email already exists' });
