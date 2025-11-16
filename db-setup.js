@@ -1,16 +1,27 @@
-// --- db-setup.js ---
-// This script is for one-time setup of your database tables.
-
-const { Pool } = require('pg');
+// --- db-setup.js (Final Correct Version) ---
+const { Pool } = require('pg'); // ⭐️ The missing import is fixed here ⭐️
 require('dotenv').config();
 
-const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_DATABASE,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
-});
+// Determine connection configuration based on the presence of the DATABASE_URL
+const pool = new Pool(
+  process.env.DATABASE_URL
+    ? {
+        // Configuration for Production (Render)
+        connectionString: process.env.DATABASE_URL,
+        ssl: {
+          rejectUnauthorized: false, // Required for external connection
+        }
+      }
+    : {
+        // Fallback for local development
+        user: process.env.DB_USER,
+        host: process.env.DB_HOST,
+        database: process.env.DB_DATABASE,
+        password: process.env.DB_PASSWORD,
+        port: process.env.DB_PORT,
+      }
+);
+
 
 const createTablesQuery = `
   -- Enable UUID extension if not already enabled
@@ -27,7 +38,8 @@ const createTablesQuery = `
   CREATE TABLE IF NOT EXISTS "table" (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     restaurant_id UUID NOT NULL REFERENCES restaurant(id),
-    name VARCHAR(50) NOT NULL
+    name VARCHAR(50) NOT NULL,
+    table_code VARCHAR(10) -- Added for anti-spam verification
   );
 
   -- 3. Category (for menus)
@@ -44,8 +56,8 @@ const createTablesQuery = `
     category_id INTEGER NOT NULL REFERENCES category(id) ON DELETE CASCADE,
     name VARCHAR(150) NOT NULL,
     description TEXT,
-    price INTEGER NOT NULL, -- Store price in cents (e.g., 1050 for $10.50)
-    image_url VARCHAR(255),
+    price INTEGER NOT NULL,
+    image_url VARCHAR(255), -- Added for image storage
     is_available BOOLEAN DEFAULT TRUE
   );
 
@@ -56,6 +68,7 @@ const createTablesQuery = `
     table_id UUID REFERENCES "table"(id),
     status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, preparing, ready, completed
     total_price INTEGER NOT NULL,
+    is_paid BOOLEAN DEFAULT FALSE, -- Added for billing management
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -66,6 +79,15 @@ const createTablesQuery = `
     menu_item_id INTEGER NOT NULL REFERENCES menu_item(id),
     quantity INTEGER NOT NULL DEFAULT 1,
     notes TEXT
+  );
+
+  -- 7. Users (for admin login)
+  CREATE TABLE IF NOT EXISTS "users" (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(100) NOT NULL,
+    restaurant_id UUID NOT NULL REFERENCES restaurant(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
   -- Add indexes for faster queries
@@ -83,7 +105,7 @@ async function setupDatabase() {
     console.log('Starting table creation...');
     await client.query(createTablesQuery);
     console.log('--- Database setup successful! ---');
-    console.log('Tables created: restaurant, table, category, menu_item, order, order_item');
+    console.log('Tables created: restaurant, table, category, menu_item, order, order_item, users');
   } catch (err) {
     console.error('Error during database setup:', err);
   } finally {
