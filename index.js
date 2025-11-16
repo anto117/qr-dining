@@ -16,9 +16,16 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const server = http.createServer(app);
 
+// --- In index.js (replace the block that initializes 'io') ---
+
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:5173',
+    // ⭐️ FIX: The list of domains MUST be the value of the 'origin' key ⭐️
+    origin: [
+      'http://localhost:5173',         // Local Dev
+      'https://qr-diine-in.web.app',   // Live Firebase Domain
+      'https://qr-dining.onrender.com' // Render's own URL (optional, but safe)
+    ], 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   },
 });
