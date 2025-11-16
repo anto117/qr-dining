@@ -226,18 +226,46 @@ app.put('/api/order/:id/status', async (req, res) => {
   try {
     const query = 'UPDATE "order" SET status = $1 WHERE id = $2 RETURNING id';
     const { rows } = await db.query(query, [status, id]);
+
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
+
+    // ⭐️ TELL THE CUSTOMER (same as before)
+    io.to(id).emit('orderStatusUpdate', { status: status });
+    console.log(`Sent status '${status}' to order room ${id}`);
+
     if (status === 'completed') {
+      // --- ⭐️ NEW BILLING PUSH ---
+      // 1. Fetch the full order details for the bill
+      const billQuery = `
+        SELECT 
+            o.id, o.table_id, o.total_price, o.status, o.created_at, t.name AS table_name,
+            JSONB_AGG(jsonb_build_object('name', mi.name, 'quantity', oi.quantity)) AS items
+        FROM "order" o
+        LEFT JOIN "table" t ON o.table_id = t.id
+        LEFT JOIN order_item oi ON o.id = oi.order_id
+        LEFT JOIN menu_item mi ON oi.menu_item_id = mi.id
+        WHERE o.id = $1
+        GROUP BY o.id, t.name
+      `;
+      const billResult = await db.query(billQuery, [id]);
+      
+      if (billResult.rows.length > 0) {
+        const billData = billResult.rows[0];
+        // 2. Emit 'newBill' to the admin room with the full data
+        io.to(restaurant_id).emit('newBillReady', billData);
+        console.log(`Sent new bill ${id} to room ${restaurant_id}`);
+      }
+      // 3. Also tell KDS to remove the card (same as before)
       io.to(restaurant_id).emit('orderCompleted', { id: id });
-      console.log(`Sent order completion for ${id} to room ${restaurant_id}`);
+      
     } else {
+      // Just update KDS status (same as before)
       io.to(restaurant_id).emit('orderStatusUpdated', { id: id, newStatus: status });
       console.log(`Sent order update for ${id} to room ${restaurant_id}`);
     }
-    io.to(id).emit('orderStatusUpdate', { status: status });
-    console.log(`Sent status '${status}' to order room ${id}`);
+
     res.status(200).json(rows[0]);
   } catch (err) {
     console.error('Error updating order status:', err);
@@ -316,6 +344,7 @@ app.post('/api/menu/item', authMiddleware, upload.single('image'), async (req, r
       VALUES ($1, $2, $3, $4, TRUE, $5)
       RETURNING * `;
     const { rows } = await db.query(query, [category_id, name, description, priceInCents, imageUrl]);
+    io.to(restaurantId).emit('menuUpdated'); // ⭐️ NOTIFY ALL ADMINS
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error('--- 🔴 ERROR ADDING ITEM 🔴 ---');
@@ -354,6 +383,7 @@ app.put('/api/menu/item/:id', authMiddleware, async (req, res) => {
       RETURNING *
     `;
     const { rows } = await db.query(updateQuery, [name, description, priceInCents, category_id, id]);
+    io.to(restaurantId).emit('menuUpdated'); // ⭐️ NOTIFY ALL ADMINS
     res.status(200).json(rows[0]);
   } catch (err) {
     console.error('Error updating item:', err);
@@ -381,6 +411,7 @@ app.put('/api/menu/item/:id/availability', authMiddleware, async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ msg: 'Item not found or you do not own it' });
     }
+    io.to(restaurantId).emit('menuUpdated'); // ⭐️ NOTIFY ALL ADMINS
     res.status(200).json({ msg: 'Item availability updated' });
   } catch (err) {
     console.error('Error updating item availability:', err);
